@@ -54,8 +54,9 @@ invalid_edits = [
 def without_reorder_level(products):
     return [{k: v for k, v in p.items() if k != "reorder_level"} for p in products]
 
-def updated_copy(transaction):
-    product = next(product for product in testing_products if product["id"] == transaction["product_id"])
+#Applies a transaction to the matching product in products (a copy of testing_products) and returns it
+def updated_copy(transaction, products):
+    product = next(product for product in products if product["id"] == transaction["product_id"])
 
     if transaction["type"] == "OUT":   
         product["quantity_on_hand"] -= transaction["quantity"]
@@ -63,6 +64,11 @@ def updated_copy(transaction):
         product["quantity_on_hand"] += transaction["quantity"]
 
     return product
+
+#Keeps only the fields we send for a transaction, so server-added fields (id, transaction_date) don't affect comparisons
+def transaction_fields(transactions):
+    return [{"product_id": t["product_id"], "supplier_id": t.get("supplier_id"), "type": t["type"], "quantity": t["quantity"]}
+            for t in transactions]
 
 
 
@@ -172,12 +178,15 @@ def test_transactions(client):
     for new_product in testing_products:
         client.post("/products", json=new_product)
 
+    #copy so transactions don't change testing_products for other tests
+    expected_products = [dict(product) for product in testing_products]
+
     for transaction in transactions:
         response = client.post("/transactions", json=transaction)
         assert response.status_code == 201
         edited_stored_transaction = client.get("/products/" + str(transaction["product_id"])).get_json()
-        edited_local_transaction = updated_copy(transaction)
-        assert edited_local_transaction == without_reorder_level(edited_stored_transaction) 
+        edited_local_transaction = updated_copy(transaction, expected_products)
+        assert [edited_local_transaction] == without_reorder_level([edited_stored_transaction])
         assert edited_stored_transaction["quantity_on_hand"] >= 0 
 
 def test_get_transactions(client):
@@ -190,22 +199,25 @@ def test_get_transactions(client):
             response = client.post("/transactions", json=transaction)
             assert response.status_code == 201
 
-    supplier_ids = [transaction["supplier_id"] for transaction in transactions]
+    #every distinct supplier id used in transactions (transactions without a supplier are skipped)
+    supplier_ids = {transaction.get("supplier_id") for transaction in transactions} - {None}
 
     for testing_product in testing_products:
         product_id = testing_product["id"]
-    
-        response = client.get("/transactions/?product_id=" + product_id)
 
-        assert response.get_json() == transactions.sort(sort by removing all that dont have matching product ID)
+        response = client.get("/transactions?product_id=" + str(product_id))
+        expected = [t for t in transactions if t["product_id"] == product_id]
+        assert transaction_fields(response.get_json()) == transaction_fields(expected)
 
         for supplier_id in supplier_ids:
-            response = client.get("/transactions/?product_id=" + product_id + "&supplier_id=" + supplier_id)
-            assert response.get_json() == transactions.sort(sort by removing all that dont have matching product ID and supplier id)
+            response = client.get("/transactions?product_id=" + str(product_id) + "&supplier_id=" + str(supplier_id))
+            expected = [t for t in transactions if t["product_id"] == product_id and t.get("supplier_id") == supplier_id]
+            assert transaction_fields(response.get_json()) == transaction_fields(expected)
 
     for supplier_id in supplier_ids:
-        response = client.get("/transactions/?supplier_id=" + supplier_id)
-        assert response.get_json() == transactions.sort(sort by removing all that dont have matching supplier id)
+        response = client.get("/transactions?supplier_id=" + str(supplier_id))
+        expected = [t for t in transactions if t.get("supplier_id") == supplier_id]
+        assert transaction_fields(response.get_json()) == transaction_fields(expected)
 
     
 
