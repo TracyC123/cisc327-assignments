@@ -59,4 +59,66 @@ def test_get_one_supplier(client):
     assert data["id"] == supplier_ID
     assert data["name"] == supplier["name"]
     assert data["contact_email"] == supplier["contact_email"]
-     
+
+def test_update_a_supplier(client):
+    """| PUT | `/suppliers/<id>` | Update a supplier |
+    Get a supplier from previous tests and update it.
+
+    This is the create-then-verify pattern: send a POST, update with PUT,
+    and use the returned id to make a follow-up GET, that confirm the data is consistent. 
+    """
+
+    """ Create a supplier first. """
+    supplier = {
+                "name": "WGT-001",
+                "contact_email": "contact@example.com",
+        }
+    create_resp = client.post("/suppliers", json=supplier)
+    assert create_resp.status_code == 201
+
+    """ Retrieve the supplier by ID. """
+    supplier_ID = create_resp.get_json()["id"]
+    response = client.get(f"/suppliers/{supplier_ID}")
+    assert response.status_code == 200
+
+    """ Update the supplier's name and contact email. """
+    updated_supplier = {
+        "name": "WGT-002",
+        "contact_email": "contact@gmail.com",
+    }
+
+    update = client.put(f"/suppliers/{supplier_ID}", json=updated_supplier)
+    assert update.status_code == 200
+
+    """ Retrieve the updated supplier by ID. """
+    response = client.get(f"/suppliers/{supplier_ID}")
+    data = response.get_json()
+
+    assert data["id"] == supplier_ID
+    assert data["name"] == updated_supplier["name"]
+    assert data["contact_email"] == updated_supplier["contact_email"]
+
+
+def test_delete_a_supplier(client):
+    """| DELETE | `/suppliers/<id>` | Delete a supplier |
+    Get a supplier from previous tests and delete it.
+    """
+
+    """ Create a supplier first. """
+    supplier = {
+                "name": "WGT-001",
+                "contact_email": "contact@example.com",
+        }
+    create_resp = client.post("/suppliers", json=supplier)
+    assert create_resp.status_code == 201
+
+    """ Retrieve the supplier by ID. """
+    supplier_ID = create_resp.get_json()["id"]
+
+    """ Delete the supplier by ID. """
+    delete_supplier = client.delete(f"/suppliers/{supplier_ID}")
+
+    """ Retrieve the deleted supplier by ID. """
+    response = client.get(f"/suppliers/{supplier_ID}")
+    assert response.status_code == 404
+    
