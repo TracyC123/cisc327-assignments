@@ -32,3 +32,31 @@ def test_create_a_supplier(client):
     assert data["id"] is not None
     assert data["name"] == supplier["name"]
     assert data["contact_email"] == supplier["contact_email"]
+
+def test_get_one_supplier(client):
+    """| GET | `/suppliers/<id>` | Get one supplier |
+    Get a supplier from previous tests and retrieve it.
+
+    This is the create-then-verify pattern: send a POST, use the returned id
+    to make a follow-up GET, and confirm the data is consistent.
+    """
+
+    """ Create a supplier first. """
+    supplier = {
+                "name": "WGT-001",
+                "contact_email": "contact@example.com",
+        }
+    create_resp = client.post("/suppliers", json=supplier)
+    assert create_resp.status_code == 201
+
+    """ Retrieve the supplier by ID. """
+    supplier_ID = create_resp.get_json()["id"]
+    response = client.get(f"/suppliers/{supplier_ID}")
+
+    assert response.status_code == 200
+    data = response.get_json()
+
+    assert data["id"] == supplier_ID
+    assert data["name"] == supplier["name"]
+    assert data["contact_email"] == supplier["contact_email"]
+     
