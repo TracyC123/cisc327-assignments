@@ -30,3 +30,5 @@ def test_create_a_supplier(client):
     """ Retrieve the supplier by ID, make sure there is something created. """
     data = create_resp.get_json()
     assert data["id"] is not None
+    assert data["name"] == supplier["name"]
+    assert data["contact_email"] == supplier["contact_email"]
