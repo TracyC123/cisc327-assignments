@@ -31,6 +31,8 @@ def create_product():
         sku=data["sku"],
         unit_price=data.get("unit_price", 0.0),
         quantity_on_hand=data.get("quantity_on_hand", 0),
+        threshold=data.get("threshold", 0),
+        supplier_id=data.get("supplier_id", 0),
         reorder_level=data.get("reorder_level", 0),
     )
     store.products[product_id] = product
@@ -55,7 +57,8 @@ def update_product(product_id):
     product.sku = data.get("sku", product.sku)
     product.unit_price = data.get("unit_price", product.unit_price)
     product.quantity_on_hand = data.get("quantity_on_hand", product.quantity_on_hand)
-    product.reorder_level = data.get("reorder_level", product.reorder_level)
+    product.threshold = data.get("threshold", product.threshold)
+    product.supplier_id = data.get("supplier_id", product.supplier_id)
     return jsonify(product.to_dict())
 
 
