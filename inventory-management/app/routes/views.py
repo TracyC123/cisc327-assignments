@@ -23,10 +23,12 @@ def products_page():
             sku=request.form["sku"],
             unit_price=float(request.form["unit_price"]),
             quantity_on_hand=int(request.form["quantity_on_hand"]),
+            threshold=int(request.form["threshold"]),
+            supplier_id=int(request.form["supplier_id"]),
         )
         store.products[product_id] = product
         return redirect(url_for("views.products_page"))
-    return render_template("products.html", products=store.products.values())
+    return render_template("products.html", products=store.products.values(), suppliers=store.suppliers.values())
 
 
 @views_bp.route("/ui/products/<int:product_id>/delete", methods=["POST"])

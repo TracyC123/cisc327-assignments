@@ -28,9 +28,14 @@ def create_transaction():
     quantity = data["quantity"]
     tx_type = data["type"]
 
+    if quantity <= 0:
+        return jsonify({"error": "Quantity must be greater than 0"}), 400
+
     if tx_type == "IN":
         product.quantity_on_hand += quantity
     elif tx_type == "OUT":
+        if product.quantity_on_hand < quantity: # Check before modifying the quantity_on_hand
+            return jsonify({"error": "The quantity of stock requires more than the stock on hand.  Please replenish before proceeding."}), 400
         product.quantity_on_hand -= quantity
     else:
         return jsonify({"error": "type must be IN or OUT"}), 400
@@ -44,4 +49,16 @@ def create_transaction():
         quantity=quantity,
     )
     store.transactions[transaction_id] = transaction
-    return jsonify(transaction.to_dict()), 201
+    result = {"transaction": transaction.to_dict()}
+
+    if tx_type == "OUT" and product.quantity_on_hand < product.threshold:
+        supplier = store.suppliers.get(product.supplier_id)
+        if supplier is not None:
+            result["notification"] = (
+                f"{product.name} is below the threshold of {product.threshold}. The system has identified {supplier.name} ({supplier.contact_email}) for replenishment."
+            )
+        else: 
+            product.quantity_on_hand += quantity # Revert the quantity change since the transaction cannot be completed without a supplier
+            return jsonify({"error": "There is no supplier associated with this product.  Please add a supplier."}), 400
+
+    return jsonify(result), 201
