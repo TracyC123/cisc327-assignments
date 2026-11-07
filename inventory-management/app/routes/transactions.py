@@ -3,6 +3,8 @@ from flask import Blueprint, jsonify, request
 from app import store
 from app.models.transaction import Transaction
 
+from notification_service import send_notification # Send Notification to supplier when stock is below threshold
+
 transactions_bp = Blueprint("transactions", __name__, url_prefix="/transactions")
 
 
@@ -54,9 +56,17 @@ def create_transaction():
     if tx_type == "OUT" and product.quantity_on_hand < product.threshold:
         supplier = store.suppliers.get(product.supplier_id)
         if supplier is not None:
-            result["notification"] = (
-                f"{product.name} is below the threshold of {product.threshold}. The system has identified {supplier.name} ({supplier.contact_email}) for replenishment."
+            sent = send_notification(
+                supplier.contact_email,
+                f"Low Stock Alert: {product.name}",
+                f"{product.name} is below the threshold of {product.threshold}. "
+                f"Please replenish the stock."
             )
+            result["notification"] = sent
+
+            # result["notification"] = (
+            #     f"{product.name} is below the threshold of {product.threshold}. The system has identified {supplier.name} ({supplier.contact_email}) for replenishment."
+            # )
         else: 
             product.quantity_on_hand += quantity # Revert the quantity change since the transaction cannot be completed without a supplier
             return jsonify({"error": "There is no supplier associated with this product.  Please add a supplier."}), 400
