@@ -8,13 +8,18 @@ from notification_service import send_notification # Send Notification to suppli
 transactions_bp = Blueprint("transactions", __name__, url_prefix="/transactions")
 
 
+def _is_int(value):
+    # bool is a subclass of int, so rule it out explicitly
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 @transactions_bp.route("", methods=["GET"])
 def list_transactions():
     results = list(store.transactions.values())
     product_id = request.args.get("product_id", type=int)
     supplier_id = request.args.get("supplier_id", type=int)
     if product_id is not None:
-        results = [t for t in results if t.supplier_id == product_id]
+        results = [t for t in results if t.product_id == product_id]
     if supplier_id is not None:
         results = [t for t in results if t.supplier_id == supplier_id]
     return jsonify([t.to_dict() for t in results])
@@ -22,7 +27,16 @@ def list_transactions():
 
 @transactions_bp.route("", methods=["POST"])
 def create_transaction():
-    data = request.get_json()
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Request body must be a JSON object"}), 400
+
+    for field in ("product_id", "type", "quantity"):
+        if field not in data:
+            return jsonify({"error": f"{field} is required"}), 400
+
+    if not _is_int(data["product_id"]):
+        return jsonify({"error": "product_id must be an integer"}), 400
     product = store.products.get(data["product_id"])
     if product is None:
         return jsonify({"error": "Product not found"}), 404
@@ -30,8 +44,17 @@ def create_transaction():
     quantity = data["quantity"]
     tx_type = data["type"]
 
+    if not _is_int(quantity):
+        return jsonify({"error": "quantity must be an integer"}), 400
     if quantity <= 0:
         return jsonify({"error": "Quantity must be greater than 0"}), 400
+
+    supplier_id = data.get("supplier_id")
+    if supplier_id is not None:
+        if not _is_int(supplier_id):
+            return jsonify({"error": "supplier_id must be an integer"}), 400
+        if supplier_id not in store.suppliers:
+            return jsonify({"error": "Supplier not found"}), 404
 
     if tx_type == "IN":
         product.quantity_on_hand += quantity
@@ -46,7 +69,7 @@ def create_transaction():
     transaction = Transaction(
         id=transaction_id,
         product_id=data["product_id"],
-        supplier_id=data.get("supplier_id"),
+        supplier_id=supplier_id,
         type=tx_type,
         quantity=quantity,
     )

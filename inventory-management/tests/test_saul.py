@@ -652,9 +652,11 @@ def test_website_needs_no_login(unauthed_client):
 # HELPER FUNCTIONS
 # ============================================================
 
-#Removes reorder_level from each product, since the server adds it but we don't test it (not in README)
+#Removes fields the server adds that these tests don't set: reorder_level (not in README), and
+#threshold and supplier_id (added later by the replenishment feature)
+untested_product_fields = {"reorder_level", "threshold", "supplier_id"}
 def without_reorder_level(products):
-    return [{k: v for k, v in p.items() if k != "reorder_level"} for p in products]
+    return [{k: v for k, v in p.items() if k not in untested_product_fields} for p in products]
 
 #Applies a transaction to the matching product in products (a copy of testing_products) and returns it
 def updated_copy(transaction, products):
