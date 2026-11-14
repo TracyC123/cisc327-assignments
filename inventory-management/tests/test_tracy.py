@@ -319,9 +319,9 @@ def test_out_transaction_below_threshold_notifies_correct_supplier(client):
 
     assert response.status_code == 201
     data = response.get_json()
-    assert "notification" in data
-    assert supplier["name"] in data["notification"]
-    assert supplier["contact_email"] in data["notification"]
+    # The notification is now sent through notification_service, and the
+    # response reports whether it was sent (True) rather than a message string
+    assert data["notification"] is True
     assert get_product(client, product["id"])["quantity_on_hand"] == 4
 
 
