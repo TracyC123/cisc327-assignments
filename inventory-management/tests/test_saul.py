@@ -1,4 +1,8 @@
-#Tests for the products and transactions endpoints
+#Tests for the products, transactions and accounts endpoints
+
+import base64
+
+import pytest
 
 # ============================================================
 # TEST DATA
@@ -86,6 +90,103 @@ invalid_transactions = [
      "supplier_id": max(s["id"] for s in testing_suppliers) + 1},                                     # supplier doesn't exist
     {"product_id": valid_product_id, "type": "IN", "quantity": 5, "supplier_id": "abc"},              # supplier_id is a string
     [{"product_id": valid_product_id, "type": "IN", "quantity": 5, "supplier_id": valid_supplier_id}],# body is a list, not a dict
+]
+
+
+#Basic auth header for an account
+#Must stay above the account lists below, since they call it when the file loads
+def login(username, password):
+    credentials = base64.b64encode((username + ":" + password).encode()).decode()
+    return {"Authorization": "Basic " + credentials}
+
+#The baked-in account the app creates on startup. It is always id 1 and has every permission
+admin_login = login("ADMIN", "123")
+admin_account = {
+    "id": 1,
+    "username": "ADMIN",
+    "permissions": [
+        "accounts:read", "accounts:write",
+        "products:read", "products:write",
+        "purchase_orders:read", "purchase_orders:write",
+        "suppliers:read", "suppliers:write",
+        "transactions:read", "transactions:write",
+    ],
+}
+
+#Valid accounts. ids must be 2, 3, 4... in order, since ADMIN is always id 1
+#Permissions are kept sorted, since the server returns them sorted
+testing_accounts = [
+    {"id": 2, "username": "reader", "password": "readpass", "permissions": ["products:read", "suppliers:read"]},
+    {"id": 3, "username": "clerk", "password": "clerk:pass",
+     "permissions": ["products:read", "products:write", "transactions:read", "transactions:write"]},  # password has a colon
+    {"id": 4, "username": "manager", "password": "managepass", "permissions": ["accounts:read", "accounts:write"]},
+    {"id": 5, "username": "nobody", "password": "nopass", "permissions": []},
+]
+
+#Each of the below accounts has one problem and should be rejected by the server
+invalid_accounts = [
+    {"password": "pw", "permissions": []},                                       # missing username
+    {"username": "", "password": "pw", "permissions": []},                       # empty username
+    {"username": 123, "password": "pw", "permissions": []},                      # username is an int
+    {"username": "has:colon", "password": "pw", "permissions": []},              # username has a colon (breaks basic auth)
+    {"username": "ADMIN", "password": "pw", "permissions": []},                  # username already taken
+    {"username": "nopw", "permissions": []},                                     # missing password
+    {"username": "emptypw", "password": "", "permissions": []},                  # empty password
+    {"username": "intpw", "password": 123, "permissions": []},                   # password is an int
+    {"username": "badperm", "password": "pw", "permissions": ["fly:read"]},      # unknown permission
+    {"username": "strperm", "password": "pw", "permissions": "products:read"},   # permissions not a list
+    {"username": "intperm", "password": "pw", "permissions": [1]},               # permission is an int
+    {"username": "dictperm", "password": "pw", "permissions": [{"a": 1}]},       # permission is a dict
+    [{"username": "listbody", "password": "pw", "permissions": []}],             # body is a list, not a dict
+]
+
+#Each of the below password changes has one problem and should be rejected by the server
+invalid_password_changes = [
+    {},                    # missing password
+    {"password": ""},      # empty password
+    {"password": 123},     # password is an int
+]
+
+#Every API endpoint and the permission it needs. Ids in paths don't exist, so no request
+#changes any data, and a missing item only gives a 404 after the permission check passes
+missing_id = "999"
+endpoint_permissions = [
+    ("GET", "/products", "products:read"),
+    ("GET", "/products/low-stock", "products:read"),
+    ("GET", "/products/" + missing_id, "products:read"),
+    ("GET", "/products/" + missing_id + "/stock-level", "products:read"),
+    ("POST", "/products", "products:write"),
+    ("PUT", "/products/" + missing_id, "products:write"),
+    ("DELETE", "/products/" + missing_id, "products:write"),
+    ("GET", "/suppliers", "suppliers:read"),
+    ("GET", "/suppliers/" + missing_id, "suppliers:read"),
+    ("GET", "/suppliers/" + missing_id + "/products", "suppliers:read"),
+    ("POST", "/suppliers", "suppliers:write"),
+    ("PUT", "/suppliers/" + missing_id, "suppliers:write"),
+    ("DELETE", "/suppliers/" + missing_id, "suppliers:write"),
+    ("GET", "/transactions", "transactions:read"),
+    ("POST", "/transactions", "transactions:write"),
+    ("GET", "/purchase-orders", "purchase_orders:read"),
+    ("GET", "/purchase-orders/" + missing_id, "purchase_orders:read"),
+    ("POST", "/purchase-orders", "purchase_orders:write"),
+    ("PUT", "/purchase-orders/" + missing_id + "/receive", "purchase_orders:write"),
+    ("GET", "/accounts", "accounts:read"),
+    ("POST", "/accounts", "accounts:write"),
+    ("PUT", "/accounts/" + missing_id + "/password", "accounts:write"),
+    ("DELETE", "/accounts/" + missing_id, "accounts:write"),
+]
+
+#Each of the below should be refused as not logged in (401)
+invalid_logins = [
+    {},                                             # no Authorization header
+    login("ADMIN", "wrong"),                        # wrong password
+    login("ADMIN", ""),                             # empty password
+    login("ghost", "123"),                          # account doesn't exist
+    login("admin", "123"),                          # usernames are case sensitive
+    login(testing_accounts[0]["username"], "wrong"),# wrong password for a created account
+    {"Authorization": "Bearer admin-token"},        # old token scheme no longer works
+    {"Authorization": "Basic !!!"},                 # not valid base64
+    {"Authorization": "Basic"},                     # no credentials
 ]
 
 
@@ -300,6 +401,254 @@ def test_get_transactions(client):
 
 
 # ============================================================
+# ACCOUNT TESTS
+# ============================================================
+
+#These tests log in themselves on every request instead of using the ADMIN login that
+#conftest.py adds by default, so they exercise the real authentication
+@pytest.fixture
+def unauthed_client(client):
+    client.environ_base.pop("HTTP_AUTHORIZATION", None)
+    return client
+
+def test_admin_account_exists(unauthed_client):
+    """ADMIN account is created when the app starts.
+
+    Lists accounts as ADMIN. Asserts ADMIN is the only account and has every permission.
+    """
+    response = unauthed_client.get("/accounts", headers=admin_login)
+    assert response.status_code == 200
+    assert response.get_json() == [admin_account]
+
+def test_admin_can_use_every_endpoint(unauthed_client):
+    """ADMIN passes the permission check on every endpoint.
+
+    Calls each read endpoint as ADMIN. Asserts none are refused with 401 or 403.
+    Only GETs are called, since the write endpoints don't handle an empty body.
+    """
+    for method, path, permission in endpoint_permissions:
+        if method != "GET":
+            continue
+        response = unauthed_client.open(path, method=method, headers=admin_login)
+        assert response.status_code not in (401, 403), method + " " + path
+
+def test_create_account(unauthed_client):
+    """Account endpoint creates accounts.
+
+    Posts each account in testing_accounts as ADMIN. Asserts each request succeeds, never
+    returns the password, and that the stored accounts are ADMIN followed by the new accounts.
+    """
+    for new_account in testing_accounts:
+        response = unauthed_client.post("/accounts", json=new_account, headers=admin_login)
+        assert response.status_code == 201
+        assert "password" not in response.get_json()
+        assert response.get_json() == account_fields(new_account)
+
+    response = unauthed_client.get("/accounts", headers=admin_login)
+    assert response.get_json() == [admin_account] + [account_fields(a) for a in testing_accounts]
+
+def test_create_invalid_account_rejected(unauthed_client):
+    """Account endpoint rejects invalid accounts.
+
+    Posts each invalid account as ADMIN. Asserts the server responds with a 4xx error
+    for each, and that ADMIN is still the only account.
+    """
+    for bad_account in invalid_accounts:
+        response = unauthed_client.post("/accounts", json=bad_account, headers=admin_login)
+        assert 400 <= response.status_code < 500
+
+        #checked after every account so a failure points to the one that got through
+        response = unauthed_client.get("/accounts", headers=admin_login)
+        assert response.get_json() == [admin_account]
+
+def test_new_accounts_can_log_in(unauthed_client):
+    """Created accounts can log in with their passwords.
+
+    Creates the accounts, then has each one list accounts. Asserts the login is accepted:
+    200 if the account has accounts:read, otherwise 403 (logged in but not allowed).
+    """
+    create_accounts(unauthed_client)
+
+    for account in testing_accounts:
+        response = unauthed_client.get("/accounts", headers=account_login(account))
+        assert response.status_code == (200 if "accounts:read" in account["permissions"] else 403)
+
+def test_list_accounts_by_permission(unauthed_client):
+    """Account endpoint filters by permission.
+
+    Creates the accounts, then lists accounts by each permission, and by two permissions together.
+    Asserts each result is exactly the accounts holding all of those permissions.
+    """
+    create_accounts(unauthed_client)
+    all_accounts = [admin_account] + [account_fields(a) for a in testing_accounts]
+
+    for permission in admin_account["permissions"]:
+        response = unauthed_client.get("/accounts?permission=" + permission, headers=admin_login)
+        expected = [a for a in all_accounts if permission in a["permissions"]]
+        assert response.get_json() == expected
+
+    #more than one filter means the account needs all of them
+    response = unauthed_client.get("/accounts?permission=products:read&permission=transactions:write",
+                                   headers=admin_login)
+    expected = [a for a in all_accounts
+                if "products:read" in a["permissions"] and "transactions:write" in a["permissions"]]
+    assert response.get_json() == expected
+
+    #a permission nobody has gives an empty list
+    response = unauthed_client.get("/accounts?permission=fly:read", headers=admin_login)
+    assert response.get_json() == []
+
+def test_change_password(unauthed_client):
+    """Account endpoint changes passwords.
+
+    Creates the accounts, then changes each one's password as ADMIN. Asserts each request succeeds,
+    the old password is refused (401), and the new password is accepted.
+    """
+    create_accounts(unauthed_client)
+
+    for account in testing_accounts:
+        new_password = account["password"] + "-new"
+        response = unauthed_client.put("/accounts/" + str(account["id"]) + "/password",
+                                       json={"password": new_password}, headers=admin_login)
+        assert response.status_code == 200
+        assert response.get_json() == account_fields(account)
+
+        #401 means the login failed, anything else means it worked
+        response = unauthed_client.get("/accounts", headers=account_login(account))
+        assert response.status_code == 401
+        response = unauthed_client.get("/accounts", headers=login(account["username"], new_password))
+        assert response.status_code != 401
+
+def test_change_password_invalid_rejected(unauthed_client):
+    """Account endpoint rejects invalid password changes.
+
+    Creates the accounts, then sends each invalid password change. Asserts the server responds
+    with a 4xx error for each and the old password still works. Also asserts changing the
+    password of an account that doesn't exist gives a 404.
+    """
+    create_accounts(unauthed_client)
+    account = testing_accounts[0]
+
+    for bad_change in invalid_password_changes:
+        response = unauthed_client.put("/accounts/" + str(account["id"]) + "/password",
+                                       json=bad_change, headers=admin_login)
+        assert 400 <= response.status_code < 500
+
+        response = unauthed_client.get("/accounts", headers=account_login(account))
+        assert response.status_code != 401
+
+    response = unauthed_client.put("/accounts/" + missing_id + "/password",
+                                   json={"password": "pw"}, headers=admin_login)
+    assert response.status_code == 404
+
+def test_delete_account(unauthed_client):
+    """Account endpoint deletes accounts.
+
+    Creates the accounts, then deletes the first one. Asserts the request succeeds, the deleted
+    account can no longer log in, only the other accounts are still stored, and deleting it again gives a 404.
+    """
+    create_accounts(unauthed_client)
+    to_be_deleted = testing_accounts[0]
+
+    #delete returns 204 No Content on success
+    response = unauthed_client.delete("/accounts/" + str(to_be_deleted["id"]), headers=admin_login)
+    assert response.status_code == 204
+
+    response = unauthed_client.get("/products", headers=account_login(to_be_deleted))
+    assert response.status_code == 401
+
+    #slice instead of pop so testing_accounts isn't changed for other tests
+    response = unauthed_client.get("/accounts", headers=admin_login)
+    assert response.get_json() == [admin_account] + [account_fields(a) for a in testing_accounts[1:]]
+
+    response = unauthed_client.delete("/accounts/" + str(to_be_deleted["id"]), headers=admin_login)
+    assert response.status_code == 404
+
+def test_admin_cannot_be_changed(unauthed_client):
+    """ADMIN account can't have its password changed or be deleted.
+
+    Tries both as ADMIN, and as an account with accounts:write. Asserts both are refused with 403,
+    ADMIN can still log in with 123, and ADMIN is unchanged.
+    """
+    create_accounts(unauthed_client)
+    manager = next(a for a in testing_accounts if "accounts:write" in a["permissions"])
+
+    for headers in (admin_login, account_login(manager)):
+        response = unauthed_client.put("/accounts/1/password", json={"password": "changed"}, headers=headers)
+        assert response.status_code == 403
+        response = unauthed_client.delete("/accounts/1", headers=headers)
+        assert response.status_code == 403
+
+    response = unauthed_client.get("/accounts?permission=accounts:write", headers=admin_login)
+    assert response.status_code == 200
+    assert admin_account in response.get_json()
+
+def test_account_with_permission_manages_accounts(unauthed_client):
+    """An account other than ADMIN can manage accounts if it has accounts:write.
+
+    Creates the accounts, then has the manager account create, change the password of,
+    and delete a new account. Asserts each request succeeds.
+    """
+    create_accounts(unauthed_client)
+    manager = next(a for a in testing_accounts if "accounts:write" in a["permissions"])
+    new_account = {"username": "temp", "password": "temppass", "permissions": ["products:read"]}
+
+    response = unauthed_client.post("/accounts", json=new_account, headers=account_login(manager))
+    assert response.status_code == 201
+    new_id = str(response.get_json()["id"])
+
+    response = unauthed_client.put("/accounts/" + new_id + "/password",
+                                   json={"password": "changed"}, headers=account_login(manager))
+    assert response.status_code == 200
+
+    response = unauthed_client.delete("/accounts/" + new_id, headers=account_login(manager))
+    assert response.status_code == 204
+
+def test_valid_accounts_limited_to_their_permissions(unauthed_client):
+    """Each account can only use the endpoints its permissions allow.
+
+    Creates the accounts, then has each one call every endpoint. Asserts every endpoint the account
+    lacks the permission for is refused with 403, and every read endpoint it has the permission for
+    is not refused. Writes it is allowed are skipped, since they don't handle an empty body.
+    """
+    create_accounts(unauthed_client)
+
+    for account in testing_accounts:
+        for method, path, permission in endpoint_permissions:
+            if permission not in account["permissions"]:
+                response = unauthed_client.open(path, method=method, headers=account_login(account))
+                assert response.status_code == 403, account["username"] + " " + method + " " + path
+            elif method == "GET":
+                response = unauthed_client.open(path, method=method, headers=account_login(account))
+                assert response.status_code not in (401, 403), account["username"] + " " + method + " " + path
+
+def test_invalid_logins_rejected(unauthed_client):
+    """Every endpoint refuses requests that aren't logged in to a valid account.
+
+    Creates the accounts, then calls every endpoint with each invalid login. Asserts each one is
+    refused with 401, and that no accounts were changed.
+    """
+    create_accounts(unauthed_client)
+
+    for headers in invalid_logins:
+        for method, path, permission in endpoint_permissions:
+            response = unauthed_client.open(path, method=method, headers=headers)
+            assert response.status_code == 401, str(headers) + " " + method + " " + path
+
+    response = unauthed_client.get("/accounts", headers=admin_login)
+    assert response.get_json() == [admin_account] + [account_fields(a) for a in testing_accounts]
+
+def test_website_needs_no_login(unauthed_client):
+    """Website pages are not affected by authentication.
+
+    Loads each page without logging in. Asserts each one loads.
+    """
+    for path in ["/", "/ui/products", "/ui/suppliers", "/ui/transactions"]:
+        response = unauthed_client.get(path)
+        assert response.status_code == 200
+
+
+# ============================================================
 # HELPER FUNCTIONS
 # ============================================================
 
@@ -323,3 +672,17 @@ def updated_copy(transaction, products):
 def transaction_fields(transactions):
     return [{"product_id": t["product_id"], "supplier_id": t.get("supplier_id"), "type": t["type"], "quantity": t["quantity"]}
             for t in transactions]
+
+#Login header for one of testing_accounts
+def account_login(account):
+    return login(account["username"], account["password"])
+
+#Keeps only the fields the server returns for an account, so the password doesn't affect comparisons
+def account_fields(account):
+    return {"id": account["id"], "username": account["username"], "permissions": account["permissions"]}
+
+#Creates every account in testing_accounts as ADMIN
+def create_accounts(client):
+    for new_account in testing_accounts:
+        response = client.post("/accounts", json=new_account, headers=admin_login)
+        assert response.status_code == 201
